@@ -12,7 +12,7 @@ def handler(event, context):
     s3_source_bucket = event["detail"]["harvest_job"]["s3_destination"]["bucket_name"]
     s3_source_key = event["detail"]["harvest_job"]["s3_destination"]["manifest_key"]
 
-    # s3_source_key is something like `frc_pncmp/q1/match.mpd`
+    # s3_source_key is something like `frc_pncmp/q1/match.hls`
     # we want to download all of the files under the "q1" prefix
     # (all of the files specified by the playlist)
     s3_client = boto3.client("s3")

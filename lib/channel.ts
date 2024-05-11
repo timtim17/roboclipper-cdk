@@ -33,17 +33,15 @@ export class ChannelStack extends cdk.Stack {
         new mediapackage.CfnOriginEndpoint(this, 'MediaPackageV1Endpoint', {
             channelId: mpChannel.ref,
             id: `${id}Endpoint`,
-            dashPackage: {
+            hlsPackage: {
                 segmentDurationSeconds: 6,
-                manifestWindowSeconds: 60,
-                suggestedPresentationDelaySeconds: 10,
+                playlistWindowSeconds: 60,
             },
             startoverWindowSeconds: 30 * 60,    // 30 * 60 seconds = 30 minutes
             origination: 'DENY',
         });
 
         // MediaLive channel to intake RTMP Push input and stream to two locations, RTMP and MediaPackage
-        // TODO: RTMP credentials for downstream
         const inputSecurityGroup = new medialive.CfnInputSecurityGroup(this, 'MediaLiveInputSecurityGroup', {
             whitelistRules: [{
                 cidr: '0.0.0.0/0',
