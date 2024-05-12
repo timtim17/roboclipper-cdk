@@ -9,6 +9,5 @@ cdk.out
 
 .DS_Store
 
-src/lambda-layer/*.zip
 src/lambda-layer/ffmpeg/*
 !src/lambda-layer/ffmpeg/Makefile
