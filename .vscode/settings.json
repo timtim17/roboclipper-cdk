@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "src/lambda/trans_rs/Cargo.toml",
+        "src/lambda/harvester/Cargo.toml"
+    ]
+}

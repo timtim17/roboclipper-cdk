@@ -1,20 +1,22 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import * as cw from 'aws-cdk-lib/aws-cloudwatch';
 import * as ddb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as medialive from 'aws-cdk-lib/aws-medialive';
 import * as mediapackage from 'aws-cdk-lib/aws-mediapackage';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 
-export enum EventType { FTC, FRC, RoboMaster }
+export enum EventType { FTC, FRC, RoboMaster, Test }
 
 interface ChannelStackProps {
     harvestBucket: s3.Bucket,
     iamHarvestRole: iam.Role,
-    harvesterDdb?: ddb.Table,
+    harvestStateTable?: ddb.Table,
     downstreamRtmp?: {rtmpUrl: string, rtmpKey: string},
     eventKey?: string,
-    eventType: EventType,
+    eventType?: EventType,
+    inputSecurityGroup: medialive.CfnInputSecurityGroup,
 }
 
 export class ChannelStack extends cdk.Stack {
@@ -30,7 +32,7 @@ export class ChannelStack extends cdk.Stack {
             id: `${id}Channel`,
             description: 'MediaPackage channel for harvest VOD jobs',
         });
-        new mediapackage.CfnOriginEndpoint(this, 'MediaPackageV1Endpoint', {
+        const mpEndpoint = new mediapackage.CfnOriginEndpoint(this, 'MediaPackageEndpoint', {
             channelId: mpChannel.ref,
             id: `${id}Endpoint`,
             hlsPackage: {
@@ -38,21 +40,16 @@ export class ChannelStack extends cdk.Stack {
                 playlistWindowSeconds: 60,
             },
             startoverWindowSeconds: 30 * 60,    // 30 * 60 seconds = 30 minutes
-            origination: 'DENY',
+            origination: 'ALLOW',
         });
 
         // MediaLive channel to intake RTMP Push input and stream to two locations, RTMP and MediaPackage
-        const inputSecurityGroup = new medialive.CfnInputSecurityGroup(this, 'MediaLiveInputSecurityGroup', {
-            whitelistRules: [{
-                cidr: '0.0.0.0/0',
-            }],
-        });
         const input = new medialive.CfnInput(this, 'MediaLiveInput', {
             type: 'RTMP_PUSH',
             destinations: [{
                 streamName: 'live',
             }],
-            inputSecurityGroups: [inputSecurityGroup.ref],
+            inputSecurityGroups: [props.inputSecurityGroup.ref],
             name: `${id}Input`,
         });
         const destinations: medialive.CfnChannel.OutputDestinationProperty[] = [{
@@ -107,7 +104,7 @@ export class ChannelStack extends cdk.Stack {
                 }],
             });
         }
-        new medialive.CfnChannel(this, 'MediaLiveChannel', {
+        const mlChannel = new medialive.CfnChannel(this, 'MediaLiveChannel', {
             channelClass: 'SINGLE_PIPELINE',
             destinations,
             encoderSettings: {
@@ -138,7 +135,9 @@ export class ChannelStack extends cdk.Stack {
                             parDenominator: 1,
                             profile: 'HIGH',
                             level: 'H264_LEVEL_4_2',
-                            gopSize: 60,
+                            gopSize: 2,
+                            gopSizeUnits: 'SECONDS',
+                            gopNumBFrames: 2,
                         },
                     },
                     height: 1080,
@@ -165,13 +164,64 @@ export class ChannelStack extends cdk.Stack {
             },
         });
 
-        // // Lambda to create harvest jobs
-        // const harvestLambda = new lambda.Function(this, 'HarvestLambda', {});
+        // Lambda to create harvest jobs
+        // const harvestLambda = new lambda.Function(this, 'HarvestLambda', {
+        //     code: lambda.Code.fromAsset('src/lambda/harvester/target/lambda/robotclipper-harvester/'),
+        //     handler: '.',
+        //     runtime: lambda.Runtime.PROVIDED_AL2,
+        //     architecture: lambda.Architecture.ARM_64,
+        //     logRetention: logs.RetentionDays.THREE_DAYS,
+        //     environment: {
+        //         DDB_TABLE: props.harvestStateTable.tableArn,
+        //         MP_ENDPOINT: mpEndpoint.ref,
+        //         DEST_BUCKET: props.harvestBucket.bucketName,
+        //         IAM_HARVEST: props.iamHarvestRole.roleArn,
+        //         EVENT_KEY: props.eventKey,
+        //         EVENT_TYPE: EventType[props.eventType],
+        //     },
+        //     timeout: cdk.Duration.seconds(10),
+        // });
+        // props.harvestStateTable.grantReadWriteData(harvestLambda);
+        // harvestLambda.addToRolePolicy(new iam.PolicyStatement({
+        //     actions: ['iam:PassRole'],
+        //     resources: [props.iamHarvestRole.roleArn],
+        // }));
+        // harvestLambda.addToRolePolicy(new iam.PolicyStatement({
+        //     actions: ['mediapackage:CreateHarvestJob'],
+        //     resources: ['*'],
+        // }));
 
         // Emit a CloudFormation output of the RTMP Input Push URL
         new cdk.CfnOutput(this, 'InputPushUrl', {
             value: cdk.Fn.select(0, input.attrDestinations),
             description: 'RTMP Input URL',
         });
+
+        // TODO: CloudWatch alarm for if the channel is Enabled but no signal
+        // from the input for > 10m, to trigger a command to turn off the Channel
+        // TODO: A better way to detect this
+        const noSignalAlarm = new cw.Alarm(this, 'ChannelNoInputAlarm', {
+            metric: new cw.MathExpression({
+                expression: 'FILL(m1, 0.0001)',
+                label: 'InputVideoFrameRate (Replace Missing Data with 0.0001)',
+                usingMetrics: {
+                    m1: new cw.Metric({
+                        namespace: 'AWS/MediaLive',
+                        metricName: 'InputVideoFrameRate',
+                        statistic: 'Average',
+                        dimensionsMap: {
+                            ChannelId: mlChannel.ref,
+                            Pipeline: '0',
+                        },
+                    }),
+                },
+                period: cdk.Duration.minutes(1),
+            }),
+            threshold: 0,
+            comparisonOperator: cw.ComparisonOperator.LESS_THAN_OR_EQUAL_TO_THRESHOLD,
+            evaluationPeriods: 10,
+        });
+
+        this.tags.setTag('AppManagerCFNStackKey', this.stackName);
     }
 }

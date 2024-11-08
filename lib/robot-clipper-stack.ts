@@ -4,9 +4,10 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as medialive from 'aws-cdk-lib/aws-medialive';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
-import { ChannelStack, EventType } from './channel';
+import { ChannelStack } from './channel';
 
 export class RobotClipperStack extends cdk.Stack {
 
@@ -39,49 +40,62 @@ export class RobotClipperStack extends cdk.Stack {
         // S3 bucket to store final assets
         const finalBucket = new s3.Bucket(this, 'FinalBucket', {});
 
-        // Lambda function to convert m3u8 to mp4 using FFmpeg
-        const ffmpegLayer = new lambda.LayerVersion(this, 'FFmpegLayer', {
-            code: lambda.Code.fromAsset('src/lambda-layer/ffmpeg/ffmpeg.zip'),
-            compatibleArchitectures: [lambda.Architecture.ARM_64],
-            license: 'https://ffmpeg.org/legal.html',
+        // Lambda function to convert m3u8 to mp4
+        const iamTranscode = new iam.Role(this, 'IAMTransRole', {
+            assumedBy: new iam.ServicePrincipal('mediaconvert.amazonaws.com'),
         });
-        const ffmpegLambda = new lambda.Function(this, 'FFmpegLambda', {
-            code: lambda.Code.fromAsset('src/lambda/trans'),
-            handler: 'handler.handler',
-            runtime: lambda.Runtime.PYTHON_3_12,
+        this.harvestBucket.grantRead(iamTranscode);
+        finalBucket.grantPut(iamTranscode);
+        const transcodeLambda = new lambda.Function(this, 'TransLambda', {
+            code: lambda.Code.fromAsset('src/lambda/trans_rs/target/lambda/robotclipper-trans/'),
+            handler: '.',
+            runtime: lambda.Runtime.PROVIDED_AL2,
             architecture: lambda.Architecture.ARM_64,
             logRetention: logs.RetentionDays.THREE_DAYS,
-            layers: [ffmpegLayer],
             environment: {
-                'S3_DESTINATION_BUCKET': finalBucket.bucketName,
+                S3_DESTINATION_BUCKET: finalBucket.bucketName,
+                IAM_ROLE: iamTranscode.roleArn,
             },
-            timeout: cdk.Duration.seconds(600),
-            memorySize: 6144,
         });
-        this.harvestBucket.grantRead(ffmpegLambda);
-        finalBucket.grantPut(ffmpegLambda);
+        transcodeLambda.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['iam:PassRole'],
+            resources: [iamTranscode.roleArn],
+        }));
+        transcodeLambda.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['mediaconvert:CreateJob'],
+            resources: ['*'],
+        }));
         new events.Rule(this, 'HarvestSuccessEventRule', {
             eventPattern: {
                 source: ['aws.mediapackage'],
                 detailType: ['MediaPackage HarvestJob Notification'],
                 detail: {
-                harvest_job: {
-                    status: ['SUCCEEDED'],
-                    s3_destination: {
-                        bucket_name: [this.harvestBucket.bucketName],
-                    },
-                }
+                    harvest_job: {
+                        status: ['SUCCEEDED'],
+                        s3_destination: {
+                            bucket_name: [this.harvestBucket.bucketName],
+                        },
+                    }
                 }
             },
-            targets: [new targets.LambdaFunction(ffmpegLambda)],
+            targets: [new targets.LambdaFunction(transcodeLambda)],
         });
-
-        // TODO: DDB store for harvest state
+        const inputSecurityGroup = new medialive.CfnInputSecurityGroup(this, 'MediaLiveInputSecurityGroup', {
+            whitelistRules: [{
+                cidr: '0.0.0.0/0',
+            }],
+        });
 
         new ChannelStack(this, 'TestChannelStack', {
             harvestBucket: this.harvestBucket,
             iamHarvestRole: this.iamHarvestRole,
-            eventType: EventType.FTC,
+            // downstreamRtmp: {
+            //     rtmpUrl: 'rtmp://a.rtmp.youtube.com/live2',
+            //     rtmpKey: 'xxxx-xxxx-xxxx-xxxx-xxxx',
+            // },
+            inputSecurityGroup,
         });
+
+        this.tags.setTag('AppManagerCFNStackKey', this.stackName);
     }
 }
