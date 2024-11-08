@@ -6,6 +6,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as medialive from 'aws-cdk-lib/aws-medialive';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { ChannelStack } from './channel';
 
@@ -38,7 +40,32 @@ export class RobotClipperStack extends cdk.Stack {
         iamHarvestPolicy.attachToRole(this.iamHarvestRole);
 
         // S3 bucket to store final assets
-        const finalBucket = new s3.Bucket(this, 'FinalBucket', {});
+        const finalBucket = new s3.Bucket(this, 'FinalBucket', {
+            blockPublicAccess: new s3.BlockPublicAccess({
+                blockPublicPolicy: false,
+                blockPublicAcls: true,
+                restrictPublicBuckets: false,
+                ignorePublicAcls: true,
+            }),
+        });
+        finalBucket.addToResourcePolicy(new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            resources: [finalBucket.arnForObjects('*')],
+            principals: [new iam.AnyPrincipal()],
+        }));
+        finalBucket.addToResourcePolicy(new iam.PolicyStatement({
+            actions: ['s3:ListBucket'],
+            resources: [finalBucket.bucketArn],
+            principals: [new iam.AnyPrincipal()],
+        }));
+        finalBucket.addToResourcePolicy(new iam.PolicyStatement({
+            actions: ['s3:GetObject'],
+            effect: iam.Effect.DENY,
+            resources: [finalBucket.arnForObjects('test/*')],
+            notPrincipals: [new iam.ArnPrincipal('arn:aws:iam::267253737119:user/Administrator')],
+        }));
+        const finalBucketCreateSns = new sns.Topic(this, 'FinalBucketObjectCreate');
+        finalBucket.addObjectCreatedNotification(new s3n.SnsDestination(finalBucketCreateSns));
 
         // Lambda function to convert m3u8 to mp4
         const iamTranscode = new iam.Role(this, 'IAMTransRole', {
