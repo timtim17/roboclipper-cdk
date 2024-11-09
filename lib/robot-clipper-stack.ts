@@ -66,6 +66,11 @@ export class RobotClipperStack extends cdk.Stack {
         }));
         const finalBucketCreateSns = new sns.Topic(this, 'FinalBucketObjectCreate');
         finalBucket.addObjectCreatedNotification(new s3n.SnsDestination(finalBucketCreateSns));
+        finalBucketCreateSns.addToResourcePolicy(new iam.PolicyStatement({
+            actions: ['SNS:Subscribe'],
+            resources: [finalBucketCreateSns.topicArn],
+            principals: [new iam.AccountPrincipal('831866741626')],
+        }));
 
         // Lambda function to convert m3u8 to mp4
         const iamTranscode = new iam.Role(this, 'IAMTransRole', {
