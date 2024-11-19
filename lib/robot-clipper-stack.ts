@@ -81,7 +81,7 @@ export class RobotClipperStack extends cdk.Stack {
         const transcodeLambda = new lambda.Function(this, 'TransLambda', {
             code: lambda.Code.fromAsset('src/lambda/trans_rs/target/lambda/robotclipper-trans/'),
             handler: '.',
-            runtime: lambda.Runtime.PROVIDED_AL2,
+            runtime: lambda.Runtime.PROVIDED_AL2023,
             architecture: lambda.Architecture.ARM_64,
             logRetention: logs.RetentionDays.THREE_DAYS,
             environment: {
@@ -120,12 +120,7 @@ export class RobotClipperStack extends cdk.Stack {
         });
 
         new ChannelStack(this, 'TestChannelStack', {
-            harvestBucket: this.harvestBucket,
-            iamHarvestRole: this.iamHarvestRole,
-            // downstreamRtmp: {
-            //     rtmpUrl: 'rtmp://a.rtmp.youtube.com/live2',
-            //     rtmpKey: 'xxxx-xxxx-xxxx-xxxx-xxxx',
-            // },
+            // downstreamRtmps: [new YouTubeOutput('xxxx-xxxx-xxxx-xxxx-xxxx'),],
             inputSecurityGroup,
         });
 
