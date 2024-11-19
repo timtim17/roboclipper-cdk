@@ -2,20 +2,41 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as cw from 'aws-cdk-lib/aws-cloudwatch';
 import * as ddb from 'aws-cdk-lib/aws-dynamodb';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as medialive from 'aws-cdk-lib/aws-medialive';
 import * as mediapackage from 'aws-cdk-lib/aws-mediapackage';
-import * as s3 from 'aws-cdk-lib/aws-s3';
 
-export enum EventType { FTC, FRC, RoboMaster, Test }
+interface RtmpOutput {
+    rtmpUrl: string,
+    rtmpKey: string,
+}
+
+export class YouTubeOutput implements RtmpOutput {
+    rtmpUrl = 'rtmp://a.rtmp.youtube.com/live2';
+    rtmpKey: string;
+
+    constructor(rtmpKey: string) {
+        this.rtmpKey = rtmpKey;
+    }
+}
+
+export class TwitchOutput implements RtmpOutput {
+    rtmpUrl = 'rtmp://usw20.contribute.live-video.net/app/';
+    rtmpKey: string;
+
+    constructor(rtmpKey: string) {
+        this.rtmpKey = rtmpKey;
+    }
+}
 
 interface ChannelStackProps {
-    harvestBucket: s3.Bucket,
-    iamHarvestRole: iam.Role,
     harvestStateTable?: ddb.Table,
+    /**
+     * @deprecated
+     * @see {@link downstreamRtmps}
+     */
     downstreamRtmp?: {rtmpUrl: string, rtmpKey: string},
+    downstreamRtmps?: {rtmpUrl: string, rtmpKey: string}[],
     eventKey?: string,
-    eventType?: EventType,
     inputSecurityGroup: medialive.CfnInputSecurityGroup,
 }
 
@@ -23,8 +44,8 @@ export class ChannelStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: cdk.StackProps & ChannelStackProps) {
         super(scope, id, props);
 
-        if (props.eventType == EventType.FRC || props.eventType == EventType.RoboMaster) {
-            throw new Error('FRC and RoboMaster events are not yet supported');
+        if (props.downstreamRtmp) {
+            props.downstreamRtmps = [...(props.downstreamRtmps ?? []), props.downstreamRtmp];
         }
 
         // MediaPackage channel for harvest VOD jobs
@@ -75,12 +96,13 @@ export class ChannelStack extends cdk.Stack {
                 videoDescriptionName: "video_1920_1080"
             }],
         }];
-        if (props.downstreamRtmp) {
+        const downstreams = props.downstreamRtmps ?? [];
+        for (let i = 0; i < downstreams.length; i++) {
             destinations.push({
-                id: 'RtmpOutput',
+                id: `RtmpOutput${i}`,
                 settings: [{
-                    streamName: props.downstreamRtmp.rtmpKey,
-                    url: props.downstreamRtmp.rtmpUrl,
+                    streamName: downstreams[i].rtmpKey,
+                    url: downstreams[i].rtmpUrl,
                 }]
             });
             outputGroups.push({
@@ -92,11 +114,11 @@ export class ChannelStack extends cdk.Stack {
                 },
                 outputs: [{
                     audioDescriptionNames: ['audio_3_aac128'],
-                    outputName: "Stream",
+                    outputName: `Stream${i}`,
                     outputSettings: {
                         rtmpOutputSettings: {
                             destination: {
-                                destinationRefId: 'RtmpOutput',
+                                destinationRefId: `RtmpOutput${i}`,
                             },
                         },
                     },
@@ -163,33 +185,6 @@ export class ChannelStack extends cdk.Stack {
                 maintenanceStartTime: '09:00',
             },
         });
-
-        // Lambda to create harvest jobs
-        // const harvestLambda = new lambda.Function(this, 'HarvestLambda', {
-        //     code: lambda.Code.fromAsset('src/lambda/harvester/target/lambda/robotclipper-harvester/'),
-        //     handler: '.',
-        //     runtime: lambda.Runtime.PROVIDED_AL2,
-        //     architecture: lambda.Architecture.ARM_64,
-        //     logRetention: logs.RetentionDays.THREE_DAYS,
-        //     environment: {
-        //         DDB_TABLE: props.harvestStateTable.tableArn,
-        //         MP_ENDPOINT: mpEndpoint.ref,
-        //         DEST_BUCKET: props.harvestBucket.bucketName,
-        //         IAM_HARVEST: props.iamHarvestRole.roleArn,
-        //         EVENT_KEY: props.eventKey,
-        //         EVENT_TYPE: EventType[props.eventType],
-        //     },
-        //     timeout: cdk.Duration.seconds(10),
-        // });
-        // props.harvestStateTable.grantReadWriteData(harvestLambda);
-        // harvestLambda.addToRolePolicy(new iam.PolicyStatement({
-        //     actions: ['iam:PassRole'],
-        //     resources: [props.iamHarvestRole.roleArn],
-        // }));
-        // harvestLambda.addToRolePolicy(new iam.PolicyStatement({
-        //     actions: ['mediapackage:CreateHarvestJob'],
-        //     resources: ['*'],
-        // }));
 
         // Emit a CloudFormation output of the RTMP Input Push URL
         new cdk.CfnOutput(this, 'InputPushUrl', {

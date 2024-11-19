@@ -9,7 +9,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
-import { ChannelStack } from './channel';
+import { ChannelStack, YouTubeOutput } from './channel';
 
 export class RobotClipperStack extends cdk.Stack {
 
@@ -89,6 +89,7 @@ export class RobotClipperStack extends cdk.Stack {
                 IAM_ROLE: iamTranscode.roleArn,
             },
         });
+        this.harvestBucket.grantRead(transcodeLambda);
         transcodeLambda.addToRolePolicy(new iam.PolicyStatement({
             actions: ['iam:PassRole'],
             resources: [iamTranscode.roleArn],
