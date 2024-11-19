@@ -109,7 +109,7 @@ async fn convert_parts(client: mediaconvert::Client, iam_role: &str, s3_source_b
                 .output_group_settings(OutputGroupSettings::builder()
                     .r#type(OutputGroupType::FileGroupSettings)
                     .file_group_settings(FileGroupSettings::builder()
-                        .destination(format!("s3://{}/{}.mp4", s3_destination_bucket, prefix))
+                        .destination(format!("s3://{}/{}", s3_destination_bucket, prefix.replace("_", "/")))
                         .destination_settings(DestinationSettings::builder()
                             .s3_settings(S3DestinationSettings::builder().storage_class(S3StorageClass::Standard).build())
                             .build())
