@@ -1,9 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import * as cw from 'aws-cdk-lib/aws-cloudwatch';
-import * as ddb from 'aws-cdk-lib/aws-dynamodb';
-import * as medialive from 'aws-cdk-lib/aws-medialive';
-import * as mediapackage from 'aws-cdk-lib/aws-mediapackage';
+import {
+    aws_cloudwatch as cw,
+    aws_dynamodb as ddb,
+    aws_medialive as medialive,
+    aws_mediapackagev2 as emp2,
+} from 'aws-cdk-lib';
 
 interface RtmpOutput {
     rtmpUrl: string,
@@ -38,6 +40,7 @@ interface ChannelStackProps {
     downstreamRtmps?: {rtmpUrl: string, rtmpKey: string}[],
     eventKey?: string,
     inputSecurityGroup: medialive.CfnInputSecurityGroup,
+    empChannelGroup: emp2.CfnChannelGroup,
 }
 
 export class ChannelStack extends cdk.Stack {
@@ -49,19 +52,55 @@ export class ChannelStack extends cdk.Stack {
         }
 
         // MediaPackage channel for harvest VOD jobs
-        const mpChannel = new mediapackage.CfnChannel(this, 'MediaPackageChannel', {
-            id: `${id}Channel`,
-            description: 'MediaPackage channel for harvest VOD jobs',
+        const mp2Channel = new emp2.CfnChannel(this, 'MediaPackageV2Channel', {
+            channelGroupName: props.empChannelGroup.channelGroupName,
+            channelName: `${id}Channel`,
+            inputType: 'HLS',
         });
-        const mpEndpoint = new mediapackage.CfnOriginEndpoint(this, 'MediaPackageEndpoint', {
-            channelId: mpChannel.ref,
-            id: `${id}Endpoint`,
-            hlsPackage: {
-                segmentDurationSeconds: 6,
-                playlistWindowSeconds: 60,
+        const mp2Endpoint = new emp2.CfnOriginEndpoint(this, 'MediaPackageV2Endpoint', {
+            channelGroupName: props.empChannelGroup.channelGroupName,
+            channelName: mp2Channel.channelName,
+            containerType: 'TS',
+            originEndpointName: 'main',
+            lowLatencyHlsManifests: [
+                {
+                    manifestName: 'index',
+                    manifestWindowSeconds: 60,
+                },
+            ],
+            segment: {
+                segmentDurationSeconds: 10,
+                tsUseAudioRenditionGroup: false,
             },
             startoverWindowSeconds: 30 * 60,    // 30 * 60 seconds = 30 minutes
-            origination: 'ALLOW',
+        });
+        new emp2.CfnOriginEndpointPolicy(this, 'EMP2OriginEndpointPolicy', {
+            channelGroupName: props.empChannelGroup.channelGroupName,
+            channelName: mp2Channel.channelName,
+            originEndpointName: mp2Endpoint.originEndpointName,
+            policy: {
+                "Version" : "2012-10-17",
+                "Statement" : [ {
+                  "Sid" : "AllowPublicGetObjectAccess",
+                  "Effect" : "Allow",
+                  "Principal" : "*",
+                  "Action" : [ "mediapackagev2:GetHeadObject", "mediapackagev2:GetObject" ],
+                  "Resource" : mp2Endpoint.attrArn
+                }, {
+                  "Sid" : "AllowMediaPackageHarvestObjectAccess",
+                  "Effect" : "Allow",
+                  "Principal" : {
+                    "Service" : "mediapackagev2.amazonaws.com"
+                  },
+                  "Action" : "mediapackagev2:HarvestObject",
+                  "Resource" : mp2Endpoint.attrArn,
+                  "Condition" : {
+                    "StringEquals" : {
+                      "AWS:SourceAccount" : "267253737119"
+                    }
+                  }
+                } ]
+              },
         });
 
         // MediaLive channel to intake RTMP Push input and stream to two locations, RTMP and MediaPackage
@@ -74,16 +113,24 @@ export class ChannelStack extends cdk.Stack {
             name: `${id}Input`,
         });
         const destinations: medialive.CfnChannel.OutputDestinationProperty[] = [{
-            id: 'MediaPackageOutput',
-            mediaPackageSettings: [{
-                channelId: mpChannel.ref,
-            }],
+            id: 'EMP2Output',
+            settings: [
+                {
+                    url: cdk.Fn.select(0, mp2Channel.attrIngestEndpointUrls),
+                }
+            ],
         }];
         const outputGroups: medialive.CfnChannel.OutputGroupProperty[] = [{
             outputGroupSettings: {
-                mediaPackageGroupSettings: {
+                hlsGroupSettings: {
                     destination: {
-                        destinationRefId: 'MediaPackageOutput',
+                        destinationRefId: 'EMP2Output',
+                    },
+                    hlsCdnSettings: {
+                        hlsBasicPutSettings: {
+                            numRetries: 10,
+                            connectionRetryInterval: 1,
+                        },
                     },
                 },
             },
@@ -91,7 +138,13 @@ export class ChannelStack extends cdk.Stack {
                 audioDescriptionNames: ['audio_3_aac128'],
                 outputName: "1920_1080",
                 outputSettings: {
-                    mediaPackageOutputSettings: {}
+                    hlsOutputSettings: {
+                        hlsSettings: {
+                            standardHlsSettings: {
+                                m3U8Settings: {},
+                            },
+                        },
+                    },
                 },
                 videoDescriptionName: "video_1920_1080"
             }],

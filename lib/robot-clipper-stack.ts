@@ -1,14 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as iam from 'aws-cdk-lib/aws-iam';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as logs from 'aws-cdk-lib/aws-logs';
-import * as medialive from 'aws-cdk-lib/aws-medialive';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
-import * as sns from 'aws-cdk-lib/aws-sns';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
+import { 
+    aws_events as events,
+    aws_iam as iam,
+    aws_lambda as lambda,
+    aws_logs as logs,
+    aws_medialive as medialive,
+    aws_s3 as s3,
+    aws_s3_notifications as s3n,
+    aws_sns as sns,
+    aws_events_targets as targets,
+    aws_mediapackagev2 as emp2,
+} from 'aws-cdk-lib';
 import { ChannelStack, YouTubeOutput } from './channel';
 
 export class RobotClipperStack extends cdk.Stack {
@@ -25,19 +28,7 @@ export class RobotClipperStack extends cdk.Stack {
                 expiration: cdk.Duration.days(3),
             }],
         });
-        this.iamHarvestRole = new iam.Role(this, 'IAMHarvestRole', {
-            assumedBy: new iam.ServicePrincipal('mediapackage.amazonaws.com'),
-        });
-        const iamHarvestPolicy = new iam.Policy(this, 'IAMHarvestPolicy', {
-            statements: [new iam.PolicyStatement({
-                actions: ['s3:PutObject', 's3:ListBucket', 's3:GetBucketLocation'],
-                resources: [
-                    this.harvestBucket.bucketArn,
-                    this.harvestBucket.bucketArn + '/*',
-                ],
-            })],
-        });
-        iamHarvestPolicy.attachToRole(this.iamHarvestRole);
+        this.harvestBucket.grantWrite(new iam.ServicePrincipal('mediapackagev2.amazonaws.com'));
 
         // S3 bucket to store final assets
         const finalBucket = new s3.Bucket(this, 'FinalBucket', {
@@ -119,9 +110,14 @@ export class RobotClipperStack extends cdk.Stack {
             }],
         });
 
+        const empChannelGroup = new emp2.CfnChannelGroup(this, 'ChannelGroup', {
+            channelGroupName: 'RoboClipper',
+        });
+
         new ChannelStack(this, 'TestChannelStack', {
             // downstreamRtmps: [new YouTubeOutput('xxxx-xxxx-xxxx-xxxx-xxxx'),],
             inputSecurityGroup,
+            empChannelGroup,
         });
 
         this.tags.setTag('AppManagerCFNStackKey', this.stackName);
