@@ -32,7 +32,7 @@ async fn function_handler(event: LambdaEvent<EventBridgeEvent>) -> Result<Respon
 
     let s3_source_bucket = event.payload.detail["harvest_job"]["s3_destination"]["bucket_name"].as_str().unwrap();
     let s3_source_key = event.payload.detail["harvest_job"]["s3_destination"]["manifest_key"].as_str().unwrap();
-    let re = Regex::new(r"^(.*)/(\d+)_(\d+)/main\.m3u8$").unwrap();
+    let re = Regex::new(r"^(.*)/(\d+)_(\d+)/index\.m3u8$").unwrap();
     let convert_job: mediaconvert::operation::create_job::CreateJobOutput;
     if let Some(captures) = re.captures(s3_source_key) {
         let s3_client = s3::Client::new(&config);
