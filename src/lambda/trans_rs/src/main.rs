@@ -1,13 +1,13 @@
 
 use aws_config::BehaviorVersion;
-use aws_lambda_events::event::eventbridge::EventBridgeEvent;
+use aws_lambda_events::{event::eventbridge::EventBridgeEvent, s3::S3Event};
 use aws_sdk_mediaconvert as mediaconvert;
 use aws_sdk_s3 as s3;
 use lambda_runtime::{run, service_fn, tracing, Error, LambdaEvent};
-use regex::Regex;
-
 use mediaconvert::types::{AacCodingMode, AacSettings, AudioCodec, AudioCodecSettings, AudioDefaultSelection, AudioDescription, AudioSelector, ContainerSettings, ContainerType, DestinationSettings, FileGroupSettings, H264RateControlMode, H264SceneChangeDetect, H264Settings, Input, InputTimecodeSource, JobSettings, Output, OutputGroup, OutputGroupSettings, OutputGroupType, S3DestinationSettings, S3StorageClass, TimecodeConfig, TimecodeSource, VideoCodec, VideoCodecSettings, VideoDescription};
+use regex::Regex;
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Serialize)]
 struct Response {
@@ -15,31 +15,36 @@ struct Response {
 }
 
 
-async fn function_handler(event: LambdaEvent<EventBridgeEvent>) -> Result<Response, Error> {
+async fn function_handler(event: LambdaEvent<Value>) -> Result<Response, Error> {
     println!("{:?}", event.payload);
+    if let Ok(s3_event) = serde_json::from_value::<S3Event>(event.payload.clone()) {
+        let bucket_name = s3_event.records[0].s3.bucket.name.as_ref().unwrap().to_owned();
+        let manifest_key = s3_event.records[0].s3.object.key.as_ref().unwrap().to_owned();
+        handle_clip(bucket_name, manifest_key).await
+    } else if let Ok(event_bridge_event) = serde_json::from_value::<EventBridgeEvent<Value>>(event.payload.clone()) {
+        let bucket_name = event_bridge_event.detail["harvest_job"]["s3_destination"]["bucket_name"].to_string();
+        let manifest_key = event_bridge_event.detail["harvest_job"]["s3_destination"]["manifest_key"].to_string();
+        handle_clip(bucket_name, manifest_key).await
+    } else {
+        panic!("Invalid event payload");
+    }
+}
 
-    let iam_role = match std::env::var("IAM_ROLE") {
-        Ok(val) => val,
-        Err(_) => panic!("IAM_ROLE not set"),
-    };
-    let s3_destination_bucket = match std::env::var("S3_DESTINATION_BUCKET") {
-        Ok(val) => val,
-        Err(_) => panic!("S3_DESTINATION_BUCKET not set"),
-    };
+async fn handle_clip(s3_source_bucket: String, s3_source_key: String) -> Result<Response, Error> {
+    let iam_role = std::env::var("IAM_ROLE").expect("mediaconvert iam role should be given in envvars");
+    let s3_destination_bucket = std::env::var("S3_DESTINATION_BUCKET").expect("s3 bucket should be set in env vars");
 
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let client = mediaconvert::Client::new(&config);
 
-    let s3_source_bucket = event.payload.detail["harvest_job"]["s3_destination"]["bucket_name"].as_str().unwrap();
-    let s3_source_key = event.payload.detail["harvest_job"]["s3_destination"]["manifest_key"].as_str().unwrap();
     let re = Regex::new(r"^(.*)/(\d+)_(\d+)/index\.m3u8$").unwrap();
     let convert_job: mediaconvert::operation::create_job::CreateJobOutput;
-    if let Some(captures) = re.captures(s3_source_key) {
+    if let Some(captures) = re.captures(&s3_source_key) {
         let s3_client = s3::Client::new(&config);
         let prefix = captures.get(1).unwrap().as_str();
         let total_parts: u8 = captures.get(3).unwrap().as_str().parse()?;
         let objects = s3_client.list_objects_v2()
-            .bucket(s3_source_bucket)
+            .bucket(&s3_source_bucket)
             .prefix(prefix)
             .send().await?;
         if let Some(contents) = objects.contents {

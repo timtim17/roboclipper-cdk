@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { 
-    aws_events as events,
+    // aws_events as events,
     aws_iam as iam,
     aws_lambda as lambda,
     aws_logs as logs,
@@ -9,7 +9,7 @@ import {
     aws_s3 as s3,
     aws_s3_notifications as s3n,
     aws_sns as sns,
-    aws_events_targets as targets,
+    // aws_events_targets as targets,
     aws_mediapackagev2 as emp2,
 } from 'aws-cdk-lib';
 import { ChannelStack, YouTubeOutput } from './channel';
@@ -81,6 +81,9 @@ export class RobotClipperStack extends cdk.Stack {
             },
         });
         this.harvestBucket.grantRead(transcodeLambda);
+        this.harvestBucket.addObjectCreatedNotification(new s3n.LambdaDestination(transcodeLambda), {
+            suffix: 'index.m3u8',
+        }); // TODO: low-ish hanging fruit -- only invoke the lambda when all parts are present
         transcodeLambda.addToRolePolicy(new iam.PolicyStatement({
             actions: ['iam:PassRole'],
             resources: [iamTranscode.roleArn],
@@ -89,21 +92,22 @@ export class RobotClipperStack extends cdk.Stack {
             actions: ['mediaconvert:CreateJob'],
             resources: ['*'],
         }));
-        new events.Rule(this, 'HarvestSuccessEventRule', {
-            eventPattern: {
-                source: ['aws.mediapackage'],
-                detailType: ['MediaPackage HarvestJob Notification'],
-                detail: {
-                    harvest_job: {
-                        status: ['SUCCEEDED'],
-                        s3_destination: {
-                            bucket_name: [this.harvestBucket.bucketName],
-                        },
-                    }
-                }
-            },
-            targets: [new targets.LambdaFunction(transcodeLambda)],
-        });
+        // Only supported by EMPv1
+        // new events.Rule(this, 'HarvestSuccessEventRule', {
+        //     eventPattern: {
+        //         source: ['aws.mediapackage'],
+        //         detailType: ['MediaPackage HarvestJob Notification'],
+        //         detail: {
+        //             harvest_job: {
+        //                 status: ['SUCCEEDED'],
+        //                 s3_destination: {
+        //                     bucket_name: [this.harvestBucket.bucketName],
+        //                 },
+        //             }
+        //         }
+        //     },
+        //     targets: [new targets.LambdaFunction(transcodeLambda)],
+        // });
         const inputSecurityGroup = new medialive.CfnInputSecurityGroup(this, 'MediaLiveInputSecurityGroup', {
             whitelistRules: [{
                 cidr: '0.0.0.0/0',
